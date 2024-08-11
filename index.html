@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detección de Objetos en Tiempo Real con Edad Aproximada</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        video {
+            border: 2px solid #333;
+            border-radius: 10px;
+            width: 100%;
+            max-width: 640px;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            max-width: 640px;
+            z-index: 1;
+            pointer-events: none;
+        }
+        #detections {
+            margin-top: 20px;
+            width: 100%;
+            max-width: 640px;
+            list-style-type: none;
+            padding: 0;
+        }
+        #detections li {
+            background-color: #333;
+            color: white;
+            margin: 5px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Detección de Objetos en Tiempo Real</h1>
+    <div style="position: relative;">
+        <video id="webcam" autoplay muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <ul id="detections"></ul>
+
+    <!-- TensorFlow.js y COCO-SSD pa' detectar objetos -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <!-- Facemesh pa' detectar caras y estimar la edad -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/facemesh"></script>
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const detectionsList = document.getElementById('detections');
+        let detectedObjects = {};
+
+        // Setup de la webcam, vamos a prender la cámara del pana
+        async function setupWebcam() {
+            return new Promise((resolve, reject) => {
+                const constraints = {
+                    video: true
+                };
+                navigator.mediaDevices.getUserMedia(constraints)
+                    .then(stream => {
+                        video.srcObject = stream;
+                        video.onloadedmetadata = () => {
+                            resolve();
+                        };
+                    })
+                    .catch(err => {
+                        alert("Error accediendo a la webcam: " + err.message);
+                        reject();
+                    });
+            });
+        }
+
+        // Función pa' dibujar las detecciones en el canvas
+        function drawDetections(detections) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            detections.forEach(prediction => {
+                const [x, y, width, height] = prediction.bbox;
+                ctx.strokeStyle = "#00FFFF";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, width, height);
+                ctx.fillStyle = "#00FFFF";
+                ctx.fillText(
+                    `${prediction.class} (${Math.round(prediction.score * 100)}%)`,
+                    x, y > 10 ? y - 5 : 10
+                );
+
+                // Si detectamos la cara, vamos a estimar la edad
+                if (prediction.class === "person") {
+                    estimateAge();
+                }
+
+                // Si no hemos detectado este objeto antes, lo añadimos a la lista
+                if (!detectedObjects[prediction.class]) {
+                    detectedObjects[prediction.class] = new Date().toLocaleTimeString();
+                    const li = document.createElement('li');
+                    li.innerText = `${prediction.class} detectado a las ${detectedObjects[prediction.class]}`;
+                    detectionsList.appendChild(li);
+                }
+            });
+        }
+
+        // Función pa' estimar la edad usando Facemesh
+        async function estimateAge() {
+            const facemesh = await facemesh.load();
+            const predictions = await facemesh.estimateFaces(video);
+
+            predictions.forEach(prediction => {
+                const ageEstimate = Math.round(Math.random() * (50 - 20) + 20); // Edad aproximada entre 20 y 50 años, solo pa' ejemplo
+                ctx.fillStyle = "#FF00FF";
+                ctx.fillText(`Edad aprox: ${ageEstimate}`, prediction.boundingBox.topLeft[0], prediction.boundingBox.topLeft[1] > 10 ? prediction.boundingBox.topLeft[1] - 5 : 10);
+            });
+        }
+
+        // Corremos la detección en tiempo real
+        async function runDetection() {
+            const model = await cocoSsd.load();
+            setInterval(async () => {
+                const detections = await model.detect(video);
+                drawDetections(detections);
+            }, 500); // 2 FPS = 1 detección cada 500 ms
+        }
+
+        (async () => {
+            await setupWebcam();
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            runDetection();
+        })();
+    </script>
+</body>
+</html>
