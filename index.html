@@ -6,29 +6,68 @@
     <title>Detección de Objetos en Tiempo Real con Edad Aproximada</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Arial, sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            background-color: #f5f5f5;
+            background-color: #1a1a1a;
+            color: #ffffff;
             margin: 0;
             padding: 20px;
+            min-height: 100vh;
         }
-        video {
-            border: 2px solid #333;
-            border-radius: 10px;
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .video-container {
+            position: relative;
             width: 100%;
             max-width: 640px;
+            margin: 0 auto;
+            background: #2a2a2a;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        video {
+            width: 100%;
+            border-radius: 15px;
+            display: block;
         }
         canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
-            max-width: 640px;
+            height: 100%;
             z-index: 1;
             pointer-events: none;
+        }
+        #controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
         }
         #detections {
             margin-top: 20px;
@@ -41,107 +80,266 @@
             background-color: #333;
             color: white;
             margin: 5px 0;
-            padding: 10px;
-            border-radius: 5px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            animation: fadeIn 0.3s ease-in;
+        }
+        #stats {
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            width: 100%;
+            max-width: 640px;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .loading-spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #4CAF50;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <h1>Detección de Objetos en Tiempo Real</h1>
-    <div style="position: relative;">
-        <video id="webcam" autoplay muted></video>
-        <canvas id="canvas"></canvas>
+    <div class="container">
+        <h1>Detección de Objetos en Tiempo Real</h1>
+        <div class="video-container">
+            <video id="webcam" autoplay muted></video>
+            <canvas id="canvas"></canvas>
+        </div>
+        <div id="controls">
+            <button id="startBtn">Iniciar Detección</button>
+            <button id="pauseBtn" disabled>Pausar</button>
+            <button id="screenshotBtn">Capturar Imagen</button>
+        </div>
+        <div id="stats">
+            <p>FPS: <span id="fps">0</span></p>
+            <p>Objetos detectados: <span id="objectCount">0</span></p>
+        </div>
+        <ul id="detections"></ul>
     </div>
-    <ul id="detections"></ul>
+    <div id="loading" class="loading">
+        <div class="loading-spinner"></div>
+    </div>
 
-    <!-- TensorFlow.js y COCO-SSD pa' detectar objetos -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <!-- Facemesh pa' detectar caras y estimar la edad -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/facemesh"></script>
     <script>
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const detectionsList = document.getElementById('detections');
-        let detectedObjects = {};
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const screenshotBtn = document.getElementById('screenshotBtn');
+        const loadingElement = document.getElementById('loading');
+        const fpsElement = document.getElementById('fps');
+        const objectCountElement = document.getElementById('objectCount');
 
-        // Setup de la webcam, vamos a prender la cámara del pana
+        let detectedObjects = {};
+        let isDetecting = false;
+        let model = null;
+        let facemeshModel = null;
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+
+        // Configuración de la webcam mejorada
         async function setupWebcam() {
-            return new Promise((resolve, reject) => {
-                const constraints = {
-                    video: true
-                };
-                navigator.mediaDevices.getUserMedia(constraints)
-                    .then(stream => {
-                        video.srcObject = stream;
-                        video.onloadedmetadata = () => {
-                            resolve();
-                        };
-                    })
-                    .catch(err => {
-                        alert("Error accediendo a la webcam: " + err.message);
-                        reject();
-                    });
-            });
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: "user"
+                    }
+                });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        resolve();
+                    };
+                });
+            } catch (err) {
+                console.error("Error accediendo a la webcam:", err);
+                alert("No se pudo acceder a la webcam. Por favor, verifica los permisos.");
+                throw err;
+            }
         }
 
-        // Función pa' dibujar las detecciones en el canvas
+        // Función mejorada para dibujar detecciones
         function drawDetections(detections) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
             detections.forEach(prediction => {
                 const [x, y, width, height] = prediction.bbox;
+                
+                // Dibujar rectángulo con efecto de resplandor
                 ctx.strokeStyle = "#00FFFF";
                 ctx.lineWidth = 2;
+                ctx.shadowColor = "#00FFFF";
+                ctx.shadowBlur = 10;
                 ctx.strokeRect(x, y, width, height);
-                ctx.fillStyle = "#00FFFF";
-                ctx.fillText(
-                    `${prediction.class} (${Math.round(prediction.score * 100)}%)`,
-                    x, y > 10 ? y - 5 : 10
-                );
+                
+                // Dibujar etiqueta con fondo
+                const label = `${prediction.class} (${Math.round(prediction.score * 100)}%)`;
+                ctx.font = "16px Arial";
+                const textWidth = ctx.measureText(label).width;
+                
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect(x, y > 20 ? y - 20 : y, textWidth + 10, 20);
+                
+                ctx.fillStyle = "#FFFFFF";
+                ctx.shadowBlur = 0;
+                ctx.fillText(label, x + 5, y > 20 ? y - 5 : y + 15);
 
-                // Si detectamos la cara, vamos a estimar la edad
-                if (prediction.class === "person") {
-                    estimateAge();
-                }
-
-                // Si no hemos detectado este objeto antes, lo añadimos a la lista
-                if (!detectedObjects[prediction.class]) {
-                    detectedObjects[prediction.class] = new Date().toLocaleTimeString();
-                    const li = document.createElement('li');
-                    li.innerText = `${prediction.class} detectado a las ${detectedObjects[prediction.class]}`;
-                    detectionsList.appendChild(li);
-                }
+                // Actualizar lista de objetos detectados
+                updateDetectionsList(prediction);
             });
+
+            // Actualizar contador de objetos
+            objectCountElement.textContent = detections.length;
         }
 
-        // Función pa' estimar la edad usando Facemesh
-        async function estimateAge() {
-            const facemesh = await facemesh.load();
-            const predictions = await facemesh.estimateFaces(video);
+        // Función para actualizar la lista de detecciones
+        function updateDetectionsList(prediction) {
+            const now = new Date();
+            const key = `${prediction.class}_${now.getTime()}`;
+            
+            if (!detectedObjects[key]) {
+                detectedObjects[key] = {
+                    time: now.toLocaleTimeString(),
+                    confidence: Math.round(prediction.score * 100)
+                };
 
-            predictions.forEach(prediction => {
-                const ageEstimate = Math.round(Math.random() * (50 - 20) + 20); // Edad aproximada entre 20 y 50 años, solo pa' ejemplo
-                ctx.fillStyle = "#FF00FF";
-                ctx.fillText(`Edad aprox: ${ageEstimate}`, prediction.boundingBox.topLeft[0], prediction.boundingBox.topLeft[1] > 10 ? prediction.boundingBox.topLeft[1] - 5 : 10);
-            });
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    ${prediction.class} 
+                    <span>
+                        Confianza: ${detectedObjects[key].confidence}% | 
+                        Hora: ${detectedObjects[key].time}
+                    </span>
+                `;
+                
+                detectionsList.insertBefore(li, detectionsList.firstChild);
+                
+                // Mantener solo las últimas 10 detecciones
+                if (detectionsList.children.length > 10) {
+                    detectionsList.removeChild(detectionsList.lastChild);
+                }
+            }
         }
 
-        // Corremos la detección en tiempo real
+        // Función para calcular y actualizar FPS
+        function updateFPS() {
+            const now = performance.now();
+            frameCount++;
+            
+            if (now - lastFrameTime >= 1000) {
+                fpsElement.textContent = frameCount;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+        }
+
+        // Función principal de detección
         async function runDetection() {
-            const model = await cocoSsd.load();
-            setInterval(async () => {
+            if (!isDetecting) return;
+
+            try {
                 const detections = await model.detect(video);
                 drawDetections(detections);
-            }, 500); // 2 FPS = 1 detección cada 500 ms
+                updateFPS();
+                
+                if (isDetecting) {
+                    requestAnimationFrame(runDetection);
+                }
+            } catch (error) {
+                console.error("Error en la detección:", error);
+                isDetecting = false;
+                pauseBtn.disabled = true;
+                startBtn.disabled = false;
+            }
         }
 
-        (async () => {
-            await setupWebcam();
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+        // Función para capturar screenshot
+        function captureScreenshot() {
+            const screenshot = document.createElement('canvas');
+            screenshot.width = canvas.width;
+            screenshot.height = canvas.height;
+            const ctx = screenshot.getContext('2d');
+            
+            // Dibujar video y detecciones
+            ctx.drawImage(video, 0, 0);
+            ctx.drawImage(canvas, 0, 0);
+            
+            // Descargar imagen
+            const link = document.createElement('a');
+            link.download = `deteccion_${new Date().toISOString()}.png`;
+            link.href = screenshot.toDataURL();
+            link.click();
+        }
+
+        // Inicialización
+        async function init() {
+            try {
+                await setupWebcam();
+                model = await cocoSsd.load();
+                facemeshModel = await facemesh.load();
+                loadingElement.style.display = 'none';
+                startBtn.disabled = false;
+            } catch (error) {
+                console.error("Error en la inicialización:", error);
+                loadingElement.style.display = 'none';
+                alert("Error al cargar los modelos. Por favor, recarga la página.");
+            }
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', () => {
+            isDetecting = true;
+            startBtn.disabled = true;
+            pauseBtn.disabled = false;
             runDetection();
-        })();
+        });
+
+        pauseBtn.addEventListener('click', () => {
+            isDetecting = false;
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+        });
+
+        screenshotBtn.addEventListener('click', captureScreenshot);
+
+        // Iniciar la aplicación
+        init();
     </script>
 </body>
 </html>
