@@ -2,6 +2,8 @@
 
 Una aplicación web que utiliza TensorFlow.js y modelos de inteligencia artificial para detectar objetos en tiempo real a través de la cámara web.
 
+[Probar Ahora](https://mt3k.net/mondo/Games/Detection-App-RealTime/)
+
 ## ✨ Características
 
 - 🔍 Detección de objetos en tiempo real usando COCO-SSD
